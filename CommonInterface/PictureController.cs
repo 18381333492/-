@@ -11,6 +11,7 @@ using System.Drawing.Imaging;
 using System.Net.Http;
 using System.Net;
 using System.Web;
+using Newtonsoft.Json;
 
 namespace CommonInterface
 {
@@ -27,13 +28,12 @@ namespace CommonInterface
         /// <param name="sName">项目名称/或者文件夹名称</param>
         /// <returns></returns>
         [HttpPost]
-        public result UploadByStream(string sName)
+        public async Task<KindResult> UploadByStream(string sName)
         {
-            result res = new result();
+            KindResult res = new KindResult();
             try
             {
-                //Stream PictureStream = HttpContext.Current.Request.InputStream;  // Request.Content.ReadAsStreamAsync().Result;
-                Stream PictureStream =  Request.Content.ReadAsStreamAsync().Result;
+                Stream PictureStream = await Request.Content.ReadAsStreamAsync();
                 //流转图片
                 Image img = Bitmap.FromStream(PictureStream);
                 string sFileName = DateTime.Now.ToString("yyyyMMddHHmmssfff") + ".jpg";//文件名
@@ -44,12 +44,14 @@ namespace CommonInterface
                     Directory.CreateDirectory(sPath);
                 }
                 img.Save(sPath + sFileName, ImageFormat.Jpeg);
-                res.success = true;
-                res.data = sFileName;
+                img.Dispose();
+
+                res.error =0;
+                res.url = sFileName;      
             }
             catch (Exception e)
             {
-                res.info ="服务器出错:"+e.Message.ToString();
+                res.message ="服务器出错:"+e.Message.ToString();
             }
             return res;
         }
@@ -61,56 +63,72 @@ namespace CommonInterface
         /// <param name="sName"></param>
         /// <returns></returns>
         [HttpPost]
-        public result UploadByFrom(string dir)
+        public async Task<HttpResponseMessage> UploadByFrom(string dir)
         {
-            result res = new result();
+            KindResult res = new KindResult();
             try
             {
                 var provider = new MultipartFormDataStreamProvider("D:\\Pictures\\Test");      
-                Request.Content.ReadAsMultipartAsync(provider);
+                await Request.Content.ReadAsMultipartAsync(provider);
                 List<string> list = new List<string>();
                 foreach (MultipartFileData file in provider.FileData)
                 {
-                    //图片文件上传之后可以在处理图片
+                    //可以上传的文件类型
+                    string[] sExtension = { ".gif", ".jpg", ".jpeg", ".png", ".bmp" };
+                    //获取上传的文件名
+                    string FileName = JsonConvert.DeserializeObject(file.Headers.ContentDisposition.FileName).ToString();
+                           //获取上传文件的后缀
+                    string format = System.IO.Path.GetExtension(FileName);
 
-                    //if (file != null && file.ContentLength > 0)
-                    //{
-                    //    /*图片保存路径*/
-                    //    dir = string.IsNullOrEmpty(dir) ? "Default\\" : dir + "\\";
-                    //    string sPath = "D:\\Pictures\\" + dir;
-                    //    if (!Directory.Exists(sPath))
-                    //    {
-                    //        Directory.CreateDirectory(sPath);
-                    //    }
-                    //    string format = System.IO.Path.GetExtension(file.FileName);//后缀名
+                    if (!sExtension.Contains(format))
+                    {/*上传的文件后缀名格式错误*/
+                        res.error = 1;
+                        res.message = "上传的文件格式错误!";
+                        DeletePicture(file.LocalFileName);//删除该图片
+                    }
+                    if (file.Headers.ContentDisposition.Size > 2 * 1024 * 1024)
+                    {//文件大小超过限制2M
+                        res.error = 1;
+                        res.message = "上传的文件大小超过限制2M!";
+                        DeletePicture(file.LocalFileName);//删除该图片
+                    }
 
-                    //    string[] sExtension = { ".gif", ".jpg", ".jpeg", ".png", ".bmp" };
-                    //    if (!sExtension.Contains(format))
-                    //    {//上传文件的格式错误
-                    //        res.info = "上传文件的格式错误!";
-                    //        return res;
-                    //    }
-                    //    if (file.ContentLength > (2 * 1024 * 1024))//2M
-                    //    {//上传图片大小超过限制
-                    //        res.info = "上传图片大小超过限制(2M)!";
-                    //        return res;
-                    //    }
-                    //    Image img = Bitmap.FromStream(file.InputStream);
-                    //    string sFileName = DateTime.Now.ToString("yyyyMMddHHmmssfff") + ".jpg";//文件名
-                    //    img.Save(sPath + sFileName);
-                    //    list.Add(sFileName);
-                    //}
+                        //1.获取文件流
+                    FileStream fs = new FileStream(file.LocalFileName, FileMode.Open, FileAccess.Read);
+                        //2.流转图片
+                    Image img = Bitmap.FromStream(fs);
+                        //3.组装新的文件名
+                    string sNewFileName = DateTime.Now.ToString("yyyyMMddHHmmssfff") + ".jpg";//文件名
+                        //4.保存图片
+                    img.Save("D:\\Pictures\\Test\\"+ sNewFileName, ImageFormat.Jpeg);
+                        //5.关闭文件流
+                    fs.Close();
+                        //6.释放资源
+                    img.Dispose();
+                        //7.删除原来的图片
+                    DeletePicture(file.LocalFileName);
+
+                    res.error = 0;
+                    res.url ="https://ss0.bdstatic.com/70cFvHSh_Q1YnxGkpoWK1HF6hhy/it/u=2290757533,426974567&fm=116&gp=0.jpg";
                 }
-                res.success = true;
-                res.data = string.Join(",", list.ToArray());
-                return res;
             }
             catch (Exception e)
             {
-                res.success = false;
-                res.info = e.Message.ToString();
+                res.error = 1;
+                res.message = e.Message.ToString();
             }
-            return res;
+            HttpResponseMessage response = Request.CreateResponse(HttpStatusCode.OK, "value");
+            response.Content = new StringContent(JsonConvert.SerializeObject(res), Encoding.Unicode);
+            return  response;
+        }
+
+        /// <summary>
+        /// 删除本地图片
+        /// </summary>
+        /// <param name="LocalFileName">本地图片路径和文件名</param>
+        private void DeletePicture(string LocalFileName)
+        {
+            System.IO.File.Delete(LocalFileName);
         }
 
 
@@ -123,6 +141,26 @@ namespace CommonInterface
             public string info=string.Empty;
             public object data=null;
         }
- 
+
+        /// <summary>
+        ///  KindEditor专用的返回结果
+        /// </summary>
+        public class KindResult
+        {
+            /// <summary>
+            /// 0 -成功,1-失败
+            /// </summary>
+            public int error;
+
+            /// <summary>
+            /// 返回图片路径
+            /// </summary>
+            public string url;
+
+            /// <summary>
+            /// 消息提示
+            /// </summary>
+            public string message;
+        }
     }
 }
